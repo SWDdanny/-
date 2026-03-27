@@ -11,7 +11,7 @@ from constants import CALENDAR_DATA, MAJOR_EVENTS
 
 # --- 設定區 ---
 SPREADSHEET_ID = '1CIjHi8dImHdLmNdzSMXh0qf1pE1KZHFBszS4SDdqVOg'
-CLIENT_SECRET_FILE = 'client_secret_2_740099921822-cl516v2gti8tkev687hftqcas93471km.apps.googleusercontent.com.json'
+CLIENT_SECRET_FILE = 'client_secret.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 st.set_page_config(page_title="品牌開發爬蟲系統", layout="centered")
