@@ -1,21 +1,21 @@
-name: 自動品牌名單爬蟲  # 這個 Workflow 的名字
+name: 自動品牌名單爬蟲
 
 on:
   schedule:
-    - cron: '0 1 * * *' # 設定每天自動執行的時間 (UTC 01:00，約台灣早上 9 點)
-  workflow_dispatch:      # 關鍵！這行加了，你才能在 GitHub 網頁上手動按「立即執行」
+    - cron: '0 1 * * *'
+  workflow_dispatch:
 
 jobs:
   run_crawler:
-    runs-on: ubuntu-latest # 使用 GitHub 提供的雲端電腦 (Linux)
+    runs-on: ubuntu-latest
     steps:
       - name: 複製程式碼
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # 升級到 v4
 
       - name: 安裝 Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # 升級到 v5
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: 安裝必要套件
         run: |
@@ -23,6 +23,6 @@ jobs:
 
       - name: 執行爬蟲程式
         env:
-          # 將 GitHub Secrets 裡的密鑰傳遞給程式使用
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # 強制使用 Node 24
         run: python crawler.py
