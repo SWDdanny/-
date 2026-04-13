@@ -7,8 +7,8 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 # --- 設定區 ---
-SPREADSHEET_ID = '你的試算表ID'  # 請替換為實際的 ID
-SHEET_NAME = 'Sheet1'           # 請確保工作表名稱正確
+SPREADSHEET_ID = '1jb7MZ5w00zNs3T_I7lxT24nEChudAUnUnpXLm77sOXU'  # 請替換為實際的 ID
+SHEET_NAME = '品牌名單'           # 請確保工作表名稱正確
 
 def get_gspread_service():
     """建立 Google Sheets API 連線"""
