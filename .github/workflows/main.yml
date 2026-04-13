@@ -23,6 +23,7 @@ jobs:
 
       - name: 執行爬蟲程式
         env:
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # 強制使用 Node 24
         run: python crawler.py
