@@ -1,122 +1,82 @@
-import os, json, time, re, requests, urllib.parse
-from bs4 import BeautifulSoup
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googlesearch import search  # 引入 Google 搜尋
+import os
+import requests
+import json
+import pandas as pd
+import time
 
-# --- 設定區 ---
-SPREADSHEET_ID = '1jb7MZ5w00zNs3T_I7lxT24nEChudAUnUnpXLm77sOXU'
-SHEET_NAME = '品牌名單' 
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+def search_with_serper(query):
+    """
+    使用 Serper.dev API 獲取 Google 搜尋結果
+    """
+    url = "https://google.serper.dev/search"
+    api_key = os.getenv("SERPER_API_KEY")
+    
+    if not api_key:
+        print("❌ 錯誤: 找不到環境變數 SERPER_API_KEY")
+        return None
 
-def get_service():
-    info_str = os.environ.get("GCP_SERVICE_ACCOUNT")
-    if info_str:
-        return build('sheets', 'v4', credentials=service_account.Credentials.from_service_account_info(json.loads(info_str), scopes=SCOPES))
-    return build('sheets', 'v4', credentials=service_account.Credentials.from_service_account_file('service_account.json', scopes=SCOPES))
+    payload = json.dumps({
+        "q": query,
+        "gl": "tw",    # 台灣地區
+        "hl": "zh-tw", # 繁體中文
+        "num": 5       # 抓取前 5 筆
+    })
+    
+    headers = {
+        'X-API-KEY': api_key,
+        'Content-Type': 'application/json'
+    }
 
-def get_twincn_url_via_google(brand_name):
-    """透過 Google 搜尋找到該品牌在台灣公司網的詳細頁面"""
-    query = f"site:twincn.com {brand_name} 公司基本資料"
     try:
-        # 只取搜尋結果的第一筆
-        for url in search(query, num_results=1, lang="zh-TW"):
-            if "item.aspx" in url:
-                return url
+        response = requests.post(url, headers=headers, data=payload, timeout=10)
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
-        print(f"DEBUG: Google 搜尋失敗 -> {e}")
-    return None
-
-def fetch_details_from_twincn(target_url):
-    """根據 URL 進入台灣公司網抓取電話與正式名稱"""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    try:
-        resp = requests.get(target_url, headers=headers, timeout=15)
-        resp.encoding = 'utf-8'
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        # 抓取抬頭
-        h1 = soup.find('h1')
-        title = h1.text.strip().replace("公司基本資料", "").strip() if h1 else "未知公司"
-        
-        # 抓取電話 (從 Meta 標籤或表格抓取)
-        phone = "查無電話"
-        meta_desc = soup.find('meta', attrs={'name': 'description'})
-        if meta_desc:
-            content = meta_desc.get('content', '')
-            phone_match = re.search(r'電話:([\d-]+)', content)
-            if phone_match:
-                phone = phone_match.group(1)
-        
-        # 備援：如果 Meta 沒抓到，改抓表格內容
-        if phone == "查無電話":
-            page_text = soup.get_text()
-            phone_match = re.search(r'0\d{1,2}-\d{6,9}', page_text)
-            if phone_match:
-                phone = phone_match.group()
-
-        return title, phone
-    except Exception as e:
-        print(f"DEBUG: 進入頁面抓取出錯 -> {e}")
-        return None, None
+        print(f"❌ 搜尋 '{query}' 時發生連線錯誤: {e}")
+        return None
 
 def main():
-    print("🚀 程式啟動 (Google 搜尋優化版)...")
-    service = get_service()
-    sheet = service.spreadsheets()
+    print("🚀 程式啟動 (Serper.dev API 增強版)...")
     
-    try:
-        result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=f"{SHEET_NAME}!A:K").execute()
-        values = result.get('values', [])
-    except Exception as e:
-        print(f"❌ 讀取 Sheet 失敗: {e}")
-        return
+    # 這裡放你的品牌清單，或者從 CSV 讀取
+    brands = [
+        "校園3C學購網", "ORBIS", "印花樂", "台北凱撒大飯店", 
+        "達特聖克", "植村秀", "新光三越", "Bosch", "夏普", 
+        "飛利浦", "大同", "Dyson", "VESTA", "TESCOM"
+    ]
+    
+    results_list = []
 
-    if not values: return
-    header = values[0]
-    col_brand, col_status = -1, -1
-    for idx, col in enumerate(header):
-        if "品牌名稱" in col: col_brand = idx
-        if "狀態" in col: col_status = idx
-
-    for i, row in enumerate(values):
-        if i == 0: continue
+    for brand in brands:
+        print(f"🔎 處理中: {brand}...")
         
-        status = row[col_status] if len(row) > col_status else ""
-        brand = row[col_brand] if len(row) > col_brand else ""
-        # 檢查 J 欄 (Index 9) 是否已有資料
-        has_data = len(row) > 9 and row[9].strip() != "" and row[9] != "查無資料"
+        search_data = search_with_serper(brand)
         
-        if status == "已分配" and brand and not has_data:
-            print(f"🔎 處理中: {brand}...")
+        if search_data and "organic" in search_data and len(search_data["organic"]) > 0:
+            # 取得第一筆搜尋結果作為主要參考
+            top_result = search_data["organic"][0]
             
-            # 第一步：先用 Google 找正確的頁面網址
-            target_url = get_twincn_url_via_google(brand)
-            
-            if target_url:
-                # 第二步：進入該網址爬取資料
-                official_title, phone = fetch_details_from_twincn(target_url)
-                
-                if official_title:
-                    update_range = f"{SHEET_NAME}!J{i+1}:K{i+1}"
-                    body = {'values': [[official_title, phone]]}
-                    sheet.values().update(
-                        spreadsheetId=SPREADSHEET_ID, range=update_range,
-                        valueInputOption="USER_ENTERED", body=body
-                    ).execute()
-                    print(f"✅ 已回填: {official_title} / {phone}")
-                    time.sleep(5) # 稍微延長等待，避免 Google 封鎖
-                    continue
-
-            # 若完全找不到
+            data_row = {
+                "品牌名稱": brand,
+                "標題": top_result.get("title"),
+                "連結": top_result.get("link"),
+                "摘要": top_result.get("snippet")
+            }
+            results_list.append(data_row)
+            print(f"✅ 成功找到: {top_result.get('title')}")
+        else:
             print(f"⚠️ 無法找到 {brand} 的資料")
-            sheet.values().update(
-                spreadsheetId=SPREADSHEET_ID, range=f"{SHEET_NAME}!J{i+1}",
-                valueInputOption="USER_ENTERED", body={'values': [["查無資料"]]}
-            ).execute()
-            time.sleep(2)
+            
+        # API 呼叫雖然快，但建議還是留一點微小的間隔
+        time.sleep(0.5)
 
-    print("🏁 程式執行完畢。")
+    # 存檔成 CSV (如果你需要的話)
+    if results_list:
+        df = pd.DataFrame(results_list)
+        df.to_csv("search_results.csv", index=False, encoding="utf-8-sig")
+        print(f"\n🏁 任務完成！共抓取 {len(results_list)} 筆資料，已存入 search_results.csv")
+    else:
+        print("\n終止：沒有抓取到任何資料。")
 
 if __name__ == "__main__":
     main()
