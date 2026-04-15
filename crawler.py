@@ -41,6 +41,16 @@ def clean_company_name(raw_title):
     name = re.sub(r'(台灣標案網|台灣公司網|104人力銀行|1111人力銀行|搜尋公司列表).*$', '', name).strip()
     return name
 
+def extract_phone(text):
+    """
+    通用電話提取：支持括號, 空格, #分機, 橫槓
+    """
+    if not text: return None
+    # 正則：找 0 開頭，中間容許括號、空格、橫槓，最後容許 #分機
+    phone_pattern = r'\(?0\d{1,2}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}(?:\s?#\d+)?'
+    match = re.search(phone_pattern, text)
+    return match.group().strip() if match else None
+
 def check_business_status(page_text):
     """
     檢查頁面文字內容，判斷是否為營業中
@@ -84,28 +94,41 @@ def search_company_info(brand_name):
     print(f"🔎 搜尋品牌: {brand_name}")
     results = serper_request(f"{brand_name} twincn")
     
-    last_official_title = ""
+    found_inactive = False
     
     if results:
         for item in results:
             link = item.get("link", "")
+            snippet = item.get("snippet", "")
             title = item.get("title", "")
             
-            # 只處理台灣公司網的內頁連結
             if "twincn.com/item.aspx?no=" in link:
                 current_title = clean_company_name(title)
-                print(f"🌐 檢查內頁: {current_title} ({link})")
                 
-                status, phone = get_info_from_twincn_url(link)
-                
-                if status == "營業中":
-                    return current_title, phone
-                elif status == "已停業":
-                    last_official_title = "已停業"
-                    print(f"⚠️ 該項目已停業，跳過並尋找下一個...")
+                # --- 策略 1: 先看 Snippet 是否有電話且是否停業 ---
+                if "停業" in snippet or "廢止" in snippet or "歇業" in snippet:
+                    print(f"⚠️ Snippet 顯示已停業: {current_title}")
+                    found_inactive = True
                     continue
-        
-    return last_official_title if last_official_title else "查無品牌", "查無資料"
+                
+                snippet_phone = extract_phone(snippet)
+                if snippet_phone:
+                    print(f"✨ 從摘要直接抓到電話: {snippet_phone}")
+                    return current_title, snippet_phone
+                
+                # --- 策略 2: Snippet 沒電話，點進內頁看 ---
+                print(f"🌐 摘要無電話，進入內頁: {link}")
+                status, page_phone = get_info_from_twincn_page(link)
+                
+                if status == "營業中" and page_phone:
+                    return current_title, page_phone
+                elif status == "已停業":
+                    found_inactive = True
+                    continue
+
+    # 最後回傳邏輯
+    final_title = "已停業" if found_inactive else "查無品牌"
+    return final_title, "查無資料"
 
 def main():
     service = get_gspread_service()
@@ -121,11 +144,10 @@ def main():
 
     for i, row in enumerate(rows):
         while len(row) < 11: row.append("")
-        brand_name = row[2].strip()      # C欄 (品牌名)
-        status = row[7].strip()          # H欄 (狀態)
-        existing_title = row[9].strip()  # J欄 (公司抬頭)
+        brand_name = row[2].strip()
+        status = row[7].strip()
+        existing_title = row[9].strip()
         
-        # 僅處理 狀態為「已分配」且 J 欄尚未正確填寫的資料
         if status == "已分配" and not existing_title:
             if not brand_name: continue
             
@@ -133,19 +155,15 @@ def main():
             
             row_num = i + 2
             update_range = f"{SHEET_NAME}!J{row_num}:K{row_num}"
-            update_body = {"values": [[official_title, phone]]}
-            
             sheet.values().update(
                 spreadsheetId=SPREADSHEET_ID,
                 range=update_range,
                 valueInputOption="RAW",
-                body=update_body
+                body={"values": [[official_title, phone]]}
             ).execute()
             
-            print(f"✅ 完成回填: {brand_name} -> {official_title} | {phone}")
-            time.sleep(1.2) # 避開 Rate Limit
-
-    print("🏁 處理結束。")
+            print(f"✅ 完成: {brand_name} -> {official_title} | {phone}")
+            time.sleep(1)
 
 if __name__ == "__main__":
     main()
