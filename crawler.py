@@ -24,7 +24,7 @@ def get_gspread_service():
 def serper_request(query):
     url = "https://google.serper.dev/search"
     api_key = os.getenv("SERPER_API_KEY")
-    payload = json.dumps({"q": query, "gl": "tw", "hl": "zh-tw", "num": 5})
+    payload = json.dumps({"q": query, "gl": "tw", "hl": "zh-tw", "num": 10})
     headers = {'X-API-KEY': api_key, 'Content-Type': 'application/json'}
     try:
         response = requests.post(url, headers=headers, data=payload, timeout=10)
