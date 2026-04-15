@@ -17,7 +17,6 @@ def get_gspread_service():
     secret_data = os.getenv("GCP_SERVICE_ACCOUNT")
     if not secret_data:
         raise ValueError("❌ 找不到環境變數 GCP_SERVICE_ACCOUNT")
-    
     service_account_info = json.loads(secret_data)
     creds = service_account.Credentials.from_service_account_info(service_account_info, scopes=scopes)
     return build('sheets', 'v4', credentials=creds)
@@ -35,104 +34,84 @@ def serper_request(query):
         return []
 
 def clean_company_name(raw_title):
-    """
-    清理標題，移除雜質取得正式抬頭
-    """
+    # 移除標題雜質，保留最純粹的名稱
     name = re.sub(r'^(投標廠商|公司名稱|廠商名稱|公司抬頭|基本資料|公司簡介)[:：\s]+', '', raw_title)
     name = name.split(' - ')[0].split(' | ')[0].split('｜')[0].split(' : ')[0].strip()
     name = re.sub(r'[\(（].*?[\)）]', '', name).strip()
-    name = re.sub(r'(台灣標案網|台灣公司網|104人力銀行|1111人力銀行).*$', '', name).strip()
+    name = re.sub(r'(台灣標案網|台灣公司網|104人力銀行|1111人力銀行|搜尋公司列表).*$', '', name).strip()
     return name
 
-def is_valid_company_name(name):
-    keywords = ["公司", "集團", "行號", "有限", "工作室", "企業", "社企"]
-    invalid_keywords = ["一家", "身處", "領域", "官網", "介紹", "新聞", "評價", "職缺", "徵才"]
-    has_keyword = any(k in name for k in keywords)
-    not_descriptive = not any(ik in name for ik in invalid_keywords)
-    is_proper_length = 4 <= len(name) < 25
-    return has_keyword and not_descriptive and is_proper_length
+def check_business_status(page_text):
+    """
+    檢查頁面文字內容，判斷是否為營業中
+    """
+    # 判斷是否包含停業相關關鍵字
+    inactive_keywords = ["停業以外之非營業中", "廢止", "歇業", "解散"]
+    for k in inactive_keywords:
+        if k in page_text:
+            return False
+    # 如果看到「營業中」或沒有看到明顯停業字眼，暫且視為可用
+    return True
 
-def get_phone_from_twincn_direct(official_title):
+def get_info_from_twincn_url(url):
     """
-    修正版：先搜尋公司名稱取得正確 ID，再進入內頁抓取電話
+    進入內頁提取：1. 營業狀態 2. 電話
     """
-    print(f"🌐 正在台灣公司網搜尋: {official_title}")
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'Referer': 'https://twincn.com/'
-    }
-    
-    search_url = f"https://twincn.com/Search.aspx?q={urllib.parse.quote(official_title)}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'}
+    # 精細的電話正則：支持 (02) 1234-5678, 02 1234 5678, 02-12345678 #123 等所有格式
     phone_pattern = r'\(?0\d{1,2}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}(?:\s?#\d+)?'
     
     try:
-        # 第一步：發送搜尋請求
-        resp = requests.get(search_url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=12)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            # 尋找搜尋結果清單中的第一個連結 (通常是 /item.aspx?no=數字)
-            # 台灣公司網的結果通常在 class="Titem" 或 <a> 標籤內
-            first_link = None
-            for a in soup.find_all('a', href=True):
-                if 'item.aspx?no=' in a['href']:
-                    first_link = "https://twincn.com/" + a['href'].lstrip('/')
-                    break
-            
-            # 第二步：如果找到正式內頁連結，進入內頁
-            target_url = first_link if first_link else search_url
-            if first_link:
-                print(f"🔗 找到正式內頁網址: {target_url}")
-                resp = requests.get(target_url, headers=headers, timeout=15)
-                soup = BeautifulSoup(resp.text, 'html.parser')
-
-            # 第三步：抓取電話 (從整頁純文字找)
             page_text = soup.get_text(separator=' ')
-            phone_matches = re.findall(phone_pattern, page_text)
             
-            if phone_matches:
-                for p in phone_matches:
-                    clean_p = p.strip()
-                    # 排除掉長度太短的錯誤號碼 (區碼+號碼至少 9 碼)
-                    if len(clean_p) >= 9:
-                        return clean_p
-                        
+            # 1. 檢查營業狀態
+            if not check_business_status(page_text):
+                return "已停業", None
+            
+            # 2. 抓取電話
+            phone_match = re.search(phone_pattern, page_text)
+            phone = phone_match.group().strip() if phone_match else "查無資料"
+            return "營業中", phone
     except Exception as e:
-        print(f"❌ 爬取台灣公司網出錯: {e}")
+        print(f"❌ 讀取內頁失敗 {url}: {e}")
     
-    return "查無資料"
+    return "連線錯誤", None
 
 def search_company_info(brand_name):
-    # --- 步驟 1: 查找品牌正式抬頭 (使用指定關鍵字) ---
-    print(f"🔎 步驟 1: 查找品牌正式抬頭 -> 關鍵字: {brand_name} twincn")
-    results_step1 = serper_request(f"{brand_name} twincn")
+    print(f"🔎 搜尋品牌: {brand_name}")
+    results = serper_request(f"{brand_name} twincn")
     
-    official_title = ""
-
-    if results_step1:
-        for item in results_step1:
-            temp_name = clean_company_name(item.get("title", ""))
-            if is_valid_company_name(temp_name):
-                official_title = temp_name
-                print(f"🎯 識別到正式抬頭: {official_title}")
-                break
+    last_official_title = ""
     
-    # 如果第一步沒找到，直接回傳查無品牌
-    if not official_title:
-        print(f"❌ 無法識別 {brand_name} 的正式抬頭")
-        return "查無品牌", "查無資料"
-
-    # --- 步驟 2: 直接到台灣公司網抓電話 (不透過 Serper) ---
-    phone = get_phone_from_twincn_direct(official_title)
-
-    return official_title, phone
+    if results:
+        for item in results:
+            link = item.get("link", "")
+            title = item.get("title", "")
+            
+            # 只處理台灣公司網的內頁連結
+            if "twincn.com/item.aspx?no=" in link:
+                current_title = clean_company_name(title)
+                print(f"🌐 檢查內頁: {current_title} ({link})")
+                
+                status, phone = get_info_from_twincn_url(link)
+                
+                if status == "營業中":
+                    return current_title, phone
+                elif status == "已停業":
+                    last_official_title = "已停業"
+                    print(f"⚠️ 該項目已停業，跳過並尋找下一個...")
+                    continue
+        
+    return last_official_title if last_official_title else "查無品牌", "查無資料"
 
 def main():
     service = get_gspread_service()
     sheet = service.spreadsheets()
-
     range_to_read = f"{SHEET_NAME}!A2:K"
+    
     try:
         result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=range_to_read).execute()
         rows = result.get('values', [])
@@ -140,23 +119,16 @@ def main():
         print(f"❌ 讀取失敗: {e}")
         return
 
-    if not rows:
-        print("📭 找不到資料。")
-        return
-
     for i, row in enumerate(rows):
-        while len(row) < 11:
-            row.append("")
-
-        brand_name = row[2].strip()      # C欄
-        status = row[7].strip()          # H欄
-        existing_title = row[9].strip()  # J欄
+        while len(row) < 11: row.append("")
+        brand_name = row[2].strip()      # C欄 (品牌名)
+        status = row[7].strip()          # H欄 (狀態)
+        existing_title = row[9].strip()  # J欄 (公司抬頭)
         
-        # 僅處理 狀態為「已分配」且 J欄還沒有資料的列
+        # 僅處理 狀態為「已分配」且 J 欄尚未正確填寫的資料
         if status == "已分配" and not existing_title:
-            if not brand_name:
-                continue
-                
+            if not brand_name: continue
+            
             official_title, phone = search_company_info(brand_name)
             
             row_num = i + 2
@@ -171,9 +143,9 @@ def main():
             ).execute()
             
             print(f"✅ 完成回填: {brand_name} -> {official_title} | {phone}")
-            time.sleep(1.0) # 稍作停頓
+            time.sleep(1.2) # 避開 Rate Limit
 
-    print("🏁 所有處理已結束。")
+    print("🏁 處理結束。")
 
 if __name__ == "__main__":
     main()
