@@ -34,7 +34,7 @@ def serper_request(query):
         return []
 
 def clean_company_name(raw_title):
-    # 移除標題雜質，放寬限制以符合圓山大飯店等特殊抬頭
+    # 移除標題雜質，相容特殊組織名稱
     name = re.sub(r'^(投標廠商|公司名稱|廠商名稱|公司抬頭|基本資料|公司簡介)[:：\s]+', '', raw_title)
     name = name.split(' - ')[0].split(' | ')[0].split('｜')[0].split(' : ')[0].strip()
     name = re.sub(r'[\(（].*?[\)）]', '', name).strip()
@@ -43,17 +43,16 @@ def clean_company_name(raw_title):
 
 def extract_phone(text):
     """
-    通用電話提取：支持括號, 空格, #分機, 橫槓 (-)
+    支援括號, 空格, #分機, 橫槓 (-) 等多種格式
     """
     if not text: return None
-    # 正則：支持 (02) 2886-8888 #123 等多種格式
     phone_pattern = r'\(?0\d{1,2}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}(?:\s?#\d+)?'
     match = re.search(phone_pattern, text)
     return match.group().strip() if match else None
 
 def get_info_from_twincn_page(url):
     """
-    進入內頁檢查營業狀態與電話
+    進入內頁檢查狀態與電話
     """
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'}
     try:
@@ -62,7 +61,7 @@ def get_info_from_twincn_page(url):
             soup = BeautifulSoup(resp.text, 'html.parser')
             page_text = soup.get_text(separator=' ')
             
-            # 檢查是否為營業中
+            # 檢查營業狀態
             inactive_keywords = ["停業以外之非營業中", "廢止", "歇業", "解散"]
             if any(k in page_text for k in inactive_keywords):
                 return "已停業", None
@@ -84,39 +83,35 @@ def search_company_info(brand_name):
             snippet = item.get("snippet", "")
             title = item.get("title", "")
             
-            # 確保是台灣公司網的內頁
+            # 鎖定台灣公司網內頁
             if "twincn.com/item.aspx?no=" in link:
                 current_title = clean_company_name(title)
                 
-                # --- 策略 1: 優先檢查 Snippet (摘要) ---
-                # 檢查摘要是否有停業字眼
+                # --- 策略 1: 優先檢查搜尋摘要 (Snippet) ---
                 if any(k in snippet for k in ["停業", "廢止", "歇業", "解散"]):
                     print(f"⚠️ 摘要顯示已停業: {current_title}")
                     found_inactive = True
                     continue
                 
-                # 從摘要嘗試抓取電話
                 snippet_phone = extract_phone(snippet)
                 if snippet_phone:
                     print(f"✨ 從摘要直接抓到電話: {snippet_phone}")
                     return current_title, snippet_phone
                 
-                # --- 策略 2: 摘要沒電話，則進入內頁 ---
+                # --- 策略 2: 摘要無電話時才進入內頁 ---
                 print(f"🌐 摘要無電話，進入內頁檢查: {link}")
                 status, page_phone = get_info_from_twincn_page(link)
                 
                 if status == "營業中":
-                    # 內頁若有電話就回傳，沒有就繼續找下一個搜尋結果
                     if page_phone:
                         return current_title, page_phone
                     else:
-                        print(f"ℹ️ 內頁無電話，嘗試下一個搜尋結果...")
+                        print(f"ℹ️ 內頁無電話，嘗試下一個...")
                         continue
                 elif status == "已停業":
                     found_inactive = True
                     continue
 
-    # 最終結果回傳機制
     final_title = "已停業" if found_inactive else "查無品牌"
     return final_title, "查無資料"
 
@@ -129,11 +124,10 @@ def main():
         result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=range_to_read).execute()
         rows = result.get('values', [])
     except Exception as e:
-        print(f"❌ 讀取試算表失敗: {e}")
+        print(f"❌ 讀取失敗: {e}")
         return
 
-    if not rows:
-        return
+    if not rows: return
 
     for i, row in enumerate(rows):
         while len(row) < 11: row.append("")
@@ -141,7 +135,7 @@ def main():
         status = row[7].strip()          # H 欄
         existing_title = row[9].strip()  # J 欄
         
-        # 僅處理 狀態為「已分配」且 J 欄還沒有正確資料的列
+        # 僅處理已分配且尚未填寫正式抬頭的項目
         if status == "已分配" and (not existing_title or existing_title in ["查無品牌", "查無資料"]):
             if not brand_name: continue
             
@@ -158,13 +152,11 @@ def main():
                     valueInputOption="RAW",
                     body=update_body
                 ).execute()
-                print(f"✅ 完成回填: {brand_name} -> {official_title} | {phone}")
+                print(f"✅ 完成: {brand_name} -> {official_title} | {phone}")
             except Exception as e:
                 print(f"❌ 更新失敗: {e}")
             
-            time.sleep(1.2)
-
-    print("🏁 所有品牌處理完畢。")
+            time.sleep(1.2) # 防止頻率限制
 
 if __name__ == "__main__":
     main()
