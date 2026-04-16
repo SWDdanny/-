@@ -122,7 +122,7 @@ def main():
         status = row[7].strip()
         existing_title = row[9].strip()
         
-        if status == "已分配" and (not existing_title or existing_title in ["查無品牌", "查無資料"]):
+        if status == "已分配" and not existing_title:
             if not brand_name: continue
             
             official_title, phone = search_company_info(brand_name)
